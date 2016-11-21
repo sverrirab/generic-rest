@@ -1,5 +1,5 @@
 from __future__ import print_function
-from flask import Flask
+from flask import Flask, request
 from flask_restful import reqparse, abort, Api, Resource
 
 import argparse
@@ -18,6 +18,7 @@ request_parser = reqparse.RequestParser()
 
 verbose = 0
 strict_put = False
+authorization_token = ""
 
 
 def create_unique():
@@ -70,6 +71,15 @@ def strip_from_start(s, c):
     return s
 
 
+def validate_authorization():
+    if authorization_token:
+        auth = request.headers.get("Authorization", "").split(" ")
+        if len(auth) == 2 and auth[0].lower() == "bearer" and auth[1] == authorization_token:
+            return  # Success!
+        print("Authentication failed: '{}'".format(" ".join(auth)))
+        abort(401)
+
+
 class DataBase(object):
     def __init__(self, file_name=""):
         self._data = {}
@@ -112,17 +122,20 @@ class DataBase(object):
         return record[field]
 
     def delete(self, unique_id):
+        validate_authorization()
         self.throw_if_does_not_exist(unique_id)
         del db.data[unique_id]
         self.persist_to_disk()
 
     def put(self, unique_id, record, only_update=True):
+        validate_authorization()
         if only_update:
             self.throw_if_does_not_exist(unique_id)
         self._data[unique_id] = record
         self.persist_to_disk()
 
     def post(self, record):
+        validate_authorization()
         while True:
             unique_id = create_unique()
             if not self.exists(unique_id):
@@ -136,6 +149,7 @@ class ItemList(Resource):
         return db.all()
 
     def post(self):
+        validate_authorization()
         args = request_parser.parse_args()
         unique_id = db.post(args)
         return unique_id, 201
@@ -161,7 +175,7 @@ class ItemField(Resource):
 
 
 def main():
-    global verbose, strict_put, db
+    global verbose, strict_put, authorization_token, db
     parser = argparse.ArgumentParser("Simple rest api server")
 
     parser.add_argument("-v", "--verbose", action="count", default=0,
@@ -172,6 +186,8 @@ def main():
                         help="API root.  Default '%(default)s'")
     parser.add_argument("-f", "--file-name", default="",
                         help="Filename for persistent storage")
+    parser.add_argument("-t", "--token", default="",
+                        help="Authorization token required for updates")
     parser.add_argument("-s", "--strict-put", action="store_true", default=False,
                         help="Only allow PUT on existing resource")
     parser.add_argument("field", nargs="*", default=["text", "count_optional_int", "help_optional"],
@@ -181,9 +197,9 @@ def main():
 
     verbose = args.verbose
     strict_put = args.strict_put
-    file_name = args.file_name
+    authorization_token = args.token
 
-    db = DataBase(file_name=file_name)
+    db = DataBase(file_name=args.file_name)
 
     api_normalized = strip_from_end(strip_from_start(args.api, "/"), "/")
     api.add_resource(ItemList, "/" + api_normalized)
